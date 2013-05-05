@@ -45,6 +45,7 @@ start() ->
 	register("koordinator",PID),
 	PID.
 
+% Vorbereitung
 prepare() ->
 	% mit Namensdienst verbinden
 	Nameservice = global:whereis_name(nameservice),
@@ -58,34 +59,85 @@ prepare() ->
 % Initialisierung (Clients ist die Liste aller registrierten ggT-Prozesse)
 initial(Clients) ->
 	receive
+		% Steuernde Werte an Starter übergeben
 		{getsteeringval,Starter} ->
 			[{_,Arbeitszeit}] = ets:lookup(koordinator_config, arbeitszeit),
 			[{_,Termzeit}] = ets:lookup(koordinator_config, termzeit),
 			[{_,GGTProzessnummer}] = ets:lookup(koordinator_config, ggtprozessnummer),
 			Starter ! {steeringval,Arbeitszeit,Termzeit,GGTProzessnummer},
 			initial(Clients);
+		% Client registrieren
 		{hello,Clientname} ->
 			% Client in der Liste speichern
 			Clients_new = Clients ++ [Clientname],
-			% loggen (Rechner muss glaub ich ersetzt werden) und hier fehlt noch was
-			logging("Koordinator@Rechner.log", io_lib:format("hello: " ++ Clientname,[])),
 			initial(Clients_new);
-		{bereit} ->
-			% ggT-Prozesse in einem Ring anordnen
-			bereit(Clients)
+		% in Zustand "bereit" wechseln
+		step ->
+			% TODO ggT-Prozesse in einem Ring anordnen und Nachbarn bestimmen
+			% ({setneighbors,LeftN,RightN})
+			Flag = 0,
+			bereit(Clients, Flag)
 	end.
 
 % Arbeitsphase
-bereit(Clients) ->
+bereit(Clients, Flag) ->
 	receive
-		{ggtberechnung} ->
-			ggtBerechnung()
+		% ggT-Berechnung mit Wunsch-ggT ausführen
+		{calc,WggT} ->
+			ggtBerechnung(Clients, WggT, Flag);
+		% Flag verändern
+		toggle ->
+			case Flag == 0 of
+				true ->
+					Flag = 1;
+				false ->
+					Flag = 0
+			end;
+		% Neustart des Programms
+		reset ->
+			killClients(Clients),
+			initial([]);
+		% Beenden des Programms
+		kill ->
+			beenden(Clients)
   	end.
 
-% eine ggT-Berechnung
-ggtBerechnung() ->
-	0.
-
 % Beendigung
-beenden() ->
-	0.
+beenden(Clients) ->
+	% Kill-Kommando an alle Clients schicken
+	killClients(Clients),
+	% Abmelden vom Namensdienst
+	Nameservice ! {self(),{unbind, "koordinator"}},
+	receive 
+        ok -> io:format("..unbind..done.\n")
+	end,
+	unregister("koordinator").
+
+% Terminierungsnachricht an Clients senden
+killClients(Clients) ->
+	lists:foreach(fun(X) -> X ! {kill}, Clients).
+
+% ggT-Berechnung
+ggtBerechnung(Clients, WggT, Flag) ->
+	% Startwerte (Mis) bestimmen
+	Mis = bestimme_mis(WggT, length(Clients)),
+	% TODO Mis an die ggT-Prozesse verteilen (setpm)
+	% TODO 15% (oder mind. zwei) ggT-Prozesse für den Start auswählen (sendy)
+	receive
+		% neues Mi empfangen
+		{briefmi,{Clientname,CMi,CZeit}} ->
+			% TODO
+			ok;
+		% Ergebnis einer ggT-Berechnung empfangen
+		{briefterm,{Clientname,CMi,CZeit},From} ->
+			% TODO
+			bereit(Clients, Flag);
+		% aktuelles Mi bei allen Clients erfragen
+		prompt ->
+			% TODO ({tellmi, self()})
+			ok;
+		% aktuellen Lebenszustand aller Clients erfragen
+		nudge ->
+			% TODO ({pingGGT, self()})
+			ok
+	end.
