@@ -59,7 +59,7 @@ prepare() ->
 % Initialisierung (Clients ist die Liste aller registrierten ggT-Prozesse)
 initial(Clients) ->
 	receive
-		% Steuernde Werte an Starter übergeben
+		% Steuernde Werte an Starter ï¿½bergeben
 		{getsteeringval,Starter} ->
 			[{_,Arbeitszeit}] = ets:lookup(koordinator_config, arbeitszeit),
 			[{_,Termzeit}] = ets:lookup(koordinator_config, termzeit),
@@ -82,10 +82,10 @@ initial(Clients) ->
 % Arbeitsphase
 bereit(Clients, Flag) ->
 	receive
-		% ggT-Berechnung mit Wunsch-ggT ausführen
+		% ggT-Berechnung mit Wunsch-ggT ausfï¿½hren
 		{calc,WggT} ->
 			ggtBerechnung(Clients, WggT, Flag);
-		% Flag verändern
+		% Flag verï¿½ndern
 		toggle ->
 			case Flag == 0 of
 				true ->
@@ -122,7 +122,7 @@ ggtBerechnung(Clients, WggT, Flag) ->
 	% Startwerte (Mis) bestimmen
 	Mis = bestimme_mis(WggT, length(Clients)),
 	% TODO Mis an die ggT-Prozesse verteilen (setpm)
-	% TODO 15% (oder mind. zwei) ggT-Prozesse für den Start auswählen (sendy)
+	% TODO 15% (oder mind. zwei) ggT-Prozesse fï¿½r den Start auswï¿½hlen (sendy)
 	receive
 		% neues Mi empfangen
 		{briefmi,{Clientname,CMi,CZeit}} ->
@@ -134,10 +134,15 @@ ggtBerechnung(Clients, WggT, Flag) ->
 			bereit(Clients, Flag);
 		% aktuelles Mi bei allen Clients erfragen
 		prompt ->
-			% TODO ({tellmi, self()})
+			lists:foreach(fun(X) -> X ! {tellmi, self()}, Clients);
+		% aktuelles Mi empfangen
+		{mi, Mi} ->
+			% TODO logging
 			ok;
 		% aktuellen Lebenszustand aller Clients erfragen
 		nudge ->
-			% TODO ({pingGGT, self()})
-			ok
+			lists:foreach(fun(X) -> X ! {pingGGT, self()}, Clients);
+		% aktuellen Lebenszustand empfangen
+		{pongGGT, GGTname} ->
+			% TODO logging
 	end.
