@@ -1,15 +1,16 @@
+
 %% @author thathalas
 %% @doc @todo Add description to starter.
 
 
 -module(starter).
 -import(werkzeug,[get_config_value/2]).
--import(ggt,[start/7]).
+-import(ggt,[start/8]).
 
 %% ====================================================================
 %% API functions
 %% ====================================================================
--export([start/0]).
+-export([start/1]).
 
 
 
@@ -17,8 +18,9 @@
 %% Internal functions
 %% ====================================================================
 
-start() ->
+start(Starternummer) ->
 	
+	%TODO: ets darf nicht doppelt geladen werden beim 2. starter!
 	%Lade ggT-Prozess Konfiguration
 	{ok, ConfigListe} = file:consult("ggt.cfg"),
   	{ok, Praktikumsgruppe} = get_config_value(praktikumsgruppe, ConfigListe),
@@ -38,11 +40,11 @@ start() ->
 	%Ping auf den Nameserver
 	net_adm:ping(Nameservicenode),
 	
-	PID = spawn(fun() -> starter() end),
+	PID = spawn(fun() -> starter(Starternummer) end),
 	register("starter",PID),
 	PID.
 
-starter() ->
+starter(Starternummer) ->
 	Nameservice = global:whereis_name(nameservice),						%Namenservice holen
 	[{_,Koordinatorname}] = ets:lookup(ggt_config, koordinatorname),	%Aus der Config den Koordinatornamen holen
 	Nameservice ! {self(),{lookup,Koordinatorname}},					%Nach dem Node des Koordinators fragen
@@ -50,16 +52,25 @@ starter() ->
 	        not_found -> io:format("..meindienst..not_found.\n"); 		%Wenn nicht gefunden
 	        {pin,{Name,Node}} -> 
 				Koordinator = {Node,Name},								%Speichere den Koordinator
-				io:format("...ok: {~p,~p}.\n",[Name,Node])				%Wenn gefunden
-	end,
-	
-	Koordinator ! getsteeringval,										%Sende Nachfrage an Koordinator
-	
-	receive
-		{steeringval,ArbeitsZeit,TermZeit,GGTProzessnummer} ->			%Empfange Daten vom Koordinator
-			io:format("...ok.\n",[Name,Node])
-	end,
-	
-	[{_,Praktikumsgruppe}] = ets:lookup(ggt_config, praktikumsgruppe),
-	[{_,Teamnummer}] = ets:lookup(ggt_config, teamnummer),
-	ggt:start(GGTProzessnummer,ArbeitsZeit,TermZeit, Praktikumsgruppe, Teamnummer, Nameservice, Koordinator).
+				io:format("...ok: {~p,~p}.\n",[Name,Node]),				%Wenn gefunden
+				Koordinator ! getsteeringval,							%Sende Nachfrage an Koordinator
+				receive
+					{steeringval,ArbeitsZeit,TermZeit,GGTProzessnummer} ->	%Empfange Daten vom Koordinator
+						io:format("...ok{~p~p}.\n",[Name,Node]),
+						[{_,Praktikumsgruppe}] = ets:lookup(ggt_config, praktikumsgruppe),
+						[{_,Teamnummer}] = ets:lookup(ggt_config, teamnummer),
+						starte_prozesse(Praktikumsgruppe, Teamnummer,Starternummer,GGTProzessnummer,ArbeitsZeit,TermZeit, Nameservice, Koordinator)
+				end
+	end.
+
+starte_prozesse(Praktikumsgruppe, Teamnummer,Starternummer,GGTProzessnummer,ArbeitsZeit,TermZeit, Nameservice, Koordinator) ->
+	case GGTProzessnummer > 0 of
+		%Solange noch nicht alle Prozesse gestartet sind
+		true ->
+			%Stubse den Start des ggT Prozess an
+			ggt:start(Praktikumsgruppe, Teamnummer,Starternummer,GGTProzessnummer,ArbeitsZeit,TermZeit, Nameservice, Koordinator),
+			%Wieder hole solange noch weitere Prozesse gestartet werden müssen
+			starte_prozesse(Praktikumsgruppe, Teamnummer,Starternummer,GGTProzessnummer-1,ArbeitsZeit,TermZeit, Nameservice, Koordinator);
+		false ->
+			ok
+	end.
