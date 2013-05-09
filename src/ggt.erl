@@ -60,8 +60,12 @@ neues_mi(GGTname,LeftN,RightN, Koordinator,ArbeitsZeit,TermZeit) ->
 				{ok,TermTimerRef} = timer:send_after(TermZeit, abstimmungsstart),
 				
 				%Starte den loop nachdem die Nachbarn angekommen sind
-				loop(GGTname,LeftN,RightN,MiNeu, Koordinator,ArbeitsZeit,TermZeit,TermTimerRef)
+				loop(GGTname,LeftN,RightN,MiNeu, Koordinator,ArbeitsZeit,TermZeit,TermTimerRef,get_seconds())
 	end.
+
+get_seconds() ->
+	{Mega,Seconds,Micro} = now(),
+	(Mega * 1000000) + Seconds + (Micro / 1000000). 
 
 rechne_ggt(Mi,Y, RightN, LeftN, Koordinator, ArbeitsZeit) ->
 	
@@ -84,13 +88,17 @@ rechne_ggt(Mi,Y, RightN, LeftN, Koordinator, ArbeitsZeit) ->
 	%Gebe das Mi zurück
 	NeuMi.
 
-loop(GGTname,LeftN,RightN,Mi, Koordinator,ArbeitsZeit,TermZeit,TermTimerRef) ->
+loop(GGTname,LeftN,RightN,Mi, Koordinator,ArbeitsZeit,TermZeit,TermTimerRef,TimerLastNumber) ->
 	receive
 		%1. Mi in andere Funktion ausgelagert, gut oder schlecht?
 		{setpm,MiNeu} ->					%Erhalte Mi
+			%Starte Terminierungstimer neu
+			NeuTermTimerRef = reset_timer(TermTimerRef,TermZeit,abstimmungsstart),
+						
 			%Neue berechnung mit neuem Mi
-			loop(GGTname,LeftN,RightN,MiNeu, Koordinator,ArbeitsZeit,TermZeit,TermTimerRef);
+			loop(GGTname,LeftN,RightN,MiNeu, Koordinator,ArbeitsZeit,TermZeit,NeuTermTimerRef,get_seconds());
 		{sendy,Y} ->						%Erhalte Y
+			%TODO: Testen was passiert wenn grade kein Timer vorhanden ist
 			%Starte Terminierungstimer neu
 			NeuTermTimerRef = reset_timer(TermTimerRef,TermZeit,abstimmungsstart),
 			
@@ -99,21 +107,49 @@ loop(GGTname,LeftN,RightN,Mi, Koordinator,ArbeitsZeit,TermZeit,TermTimerRef) ->
 			
 			%Hat sich das Mi verändert?
 			case Mi == MiNeu of 
-				true ->
+				true ->				  
 				  	%Führe Schleife weiter aus
-					loop(GGTname,LeftN,RightN,MiNeu, Koordinator,ArbeitsZeit,TermZeit,NeuTermTimerRef);
+					loop(GGTname,LeftN,RightN,MiNeu, Koordinator,ArbeitsZeit,TermZeit,NeuTermTimerRef,get_seconds());
 			  	false ->
 				  	%Informiere den Koordinator darüber
 				  	Koordinator ! {briefmi,{GGTname,MiNeu,timeMilliSecond()}},	
 				  
 				  	%Führe Schleife weiter aus
-					loop(GGTname,LeftN,RightN,MiNeu, Koordinator,ArbeitsZeit,TermZeit,NeuTermTimerRef)
+					loop(GGTname,LeftN,RightN,MiNeu, Koordinator,ArbeitsZeit,TermZeit,NeuTermTimerRef,get_seconds())
 			end;
-		abstimmungsstart ->
-		  	ok;
+		abstimmungsstart ->					%Start des Terminierungsvotings
+		  	%Starten einer Abstimmung mit senden an den Rechten Nachbarn
+			RightN ! {abstimmung,GGTname},
+		  
+		  	%Führe Schleife weiter aus
+			loop(GGTname,LeftN,RightN,Mi, Koordinator,ArbeitsZeit,TermZeit,TermTimerRef,TimerLastNumber);
 		{abstimmung,Initiator} ->			%Terminierungs Voting
 			%TODO: Erhalte eine Terminierungsabstimmung
-			ok;
+
+		  	case Initiator == GGTname of
+			  	true ->
+				  	%Informiere den Koordinator
+					Koordinator ! {briefterm,{GGTname,Mi,timeMilliSecond()},self()},
+				  
+				  	%Gehe zurück in den loop
+				  	loop(GGTname,LeftN,RightN,Mi, Koordinator,ArbeitsZeit,TermZeit,TermTimerRef,TimerLastNumber);
+				false->
+				  	%Wenn die letzte Nachricht größer ist als termZeit/2
+				  	case TimerLastNumber > TermZeit/2 of
+						true ->
+						  	%Wenn es der Fall ist Sende die Abstimmung weiter
+						  	RightN ! {abstimmung,Initiator},
+					   
+					   		%...und teile es dem Koordinator mit (steht noch in Frage?!? TODO)
+							Koordinator ! {briefterm,{GGTname,Mi,timeMilliSecond()},self()},
+					   
+					   		%Gehe zurück in die Schleife
+						  	loop(GGTname,LeftN,RightN,Mi, Koordinator,ArbeitsZeit,TermZeit,TermTimerRef,TimerLastNumber);
+					 	false ->
+					   		%Ansonsten ignoriere die Anfrage und gehe zurück zur Schleife
+						  	loop(GGTname,LeftN,RightN,Mi, Koordinator,ArbeitsZeit,TermZeit,TermTimerRef,TimerLastNumber)
+					end
+			end;
 		{tellmi,From} ->					%Sendet das aktuelle Mi zurück
 			%Sende das Mi an From zurück
 			From ! {mi,Mi};
