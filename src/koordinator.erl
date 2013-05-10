@@ -1,11 +1,6 @@
 %% @author thathalas
 %% @doc @todo Add description to koordinator.
 
-% TODO Was genau ist die "aktuelle kleinste Zahl" (im Code die Variable "Ergebnis")?
-% 	hier wurde die kleinste Zahl (Ergebnis) immer dem neuen Mi (briefmi) zugeordnet
-% TODO Müssen die GGT-Prozesse auf irgendeinen Node gebunden werden (s. Koordinatorlog)?
-% TODO Wann genau ist die Berechnung beendet, dann wenn das Ergebnis (briefterm) korrekt ist?
-
 -module(koordinator).
 -import(werkzeug, [to_String/1,timeMilliSecond/0,logging/2,get_config_value/2,bestimme_mis/2]).
 
@@ -87,18 +82,64 @@ initial(Clients, Starter_Anzahl, GGT_Anzahl) ->
 			Alle_GGT_Anzahl = Starter_Anzahl * GGTProzessnummer,
 			Vermisst = Alle_GGT_Anzahl - GGT_Anzahl,
 			logging("Koordinator@Rechner.log", io_lib:format("Anmeldefrist für ggT-Prozesse abgelaufen. Vermisst werden aktuell " ++ Vermisst ++ " ggT-Prozesse.~n", [])),
-
+			
 			% Clients in einem Ring anordnen und Nachbarn bestimmen
 			ring_bilden(Clients),
-			bereit(Clients, 0)
+			bereit(Clients, 0, 0)
 	end.
 
-% Arbeitsphase
-bereit(Clients, Flag) ->
+% Arbeitsphase (Minimum ist die bisher bekannte kleinste Zahl)
+bereit(Clients, Flag, Minimum) ->
 	receive
 		% ggT-Berechnung mit Wunsch-ggT ausfuehren
 		{calc,WggT} ->
-			ggtVorbereitung(Clients, WggT, Flag);
+			starte_Berechnung(Clients, WggT, Flag);
+		% neues Mi empfangen
+		{briefmi,{Clientname,CMi,CZeit}} ->
+			case (Minimum == 0) or (CMi < Minimum) of
+				true ->
+					Neues_Minimum = CMi;
+				false ->
+					Neues_Minimum = Minimum
+			end,
+			logging("Koordinator@Rechner.log", io_lib:format(Clientname ++ " meldet neues Mi " ++ CMi ++ " um " ++ CZeit ++ " (" ++ timeMilliSecond() ++ ").~n", [])),
+			bereit(Clients, Flag, Neues_Minimum);
+		% Ergebnis einer ggT-Berechnung empfangen
+		{briefterm,{Clientname,CMi,CZeit},From} ->
+			case CMi > Minimum of
+				% Fehler: Berechnetes Ergebnis ist größer als bisher bekannte kleinste Zahl
+				true ->
+					case Flag == 0 of
+					 	% wenn Flag = 0, nur den Fehler loggen
+						true ->
+							logging("Koordinator@Rechner.log", io_lib:format(Clientname ++ " meldet falsche Terminierung mit ggT " ++ CMi ++ " um " ++ CZeit ++ " (" ++ timeMilliSecond() ++ ").~n", [])),
+						 	bereit(Clients, Flag, Minimum);
+						% wenn Flag = 1, sende dem GGT-Prozess die kleinere Zahl per sendy
+					 	false ->
+							From ! {sendy, Minimum},
+						 	bereit(Clients, Flag, Minimum)
+					end;
+				% Ergebnis ist kleiner/gleich der bisher bekannten Zahl
+				false ->
+					logging("Koordinator@Rechner.log", io_lib:format(Clientname ++ " meldet Terminierung mit ggT " ++ CMi ++ " um " ++ CZeit ++ " (" ++ timeMilliSecond() ++ ").~n", [])),
+					bereit(Clients, Flag, Minimum)
+			end;
+		% aktuelles Mi bei allen Clients erfragen
+		prompt ->
+			lists:foreach(fun(X) -> X ! {tellmi, self()} end, Clients),
+		 	bereit(Clients, Flag, Minimum);
+		% aktuelles Mi empfangen
+		{mi, Mi} ->
+			logging("Koordinator@Rechner.log", io_lib:format("Aktuelles Mi" ++ Mi ++ " (" ++ timeMilliSecond() ++ ").~n", [])),
+			bereit(Clients, Flag, Minimum);
+		% aktuellen Lebenszustand aller Clients erfragen
+		nudge ->
+			lists:foreach(fun(X) -> X ! {pingGGT, self()} end, Clients),
+		 	bereit(Clients, Flag, Minimum);
+		% aktuellen Lebenszustand empfangen
+		{pongGGT, GGTname} ->
+			logging("Koordinator@Rechner.log", io_lib:format("ggT-Prozess " ++ GGTname ++ " ist lebendig (" ++ timeMilliSecond() ++ ").~n", [])),
+		 	bereit(Clients, Flag, Minimum);
 		% Flag veraendern
 		toggle ->
 			case Flag == 0 of
@@ -109,7 +150,7 @@ bereit(Clients, Flag) ->
 					Flag_neu = 0,
 					logging("Koordinator@Rechner.log", io_lib:format("toggle des Koordinators um " ++ timeMilliSecond() ++ ": 1 zu 0.~n", []))
 			end,
-			bereit(Clients, Flag_neu);
+			bereit(Clients, Flag_neu, Minimum);
 		% Neustart des Programms
 		reset ->
 			killClients(Clients),
@@ -136,7 +177,7 @@ killClients(Clients) ->
 	lists:foreach(fun(X) -> X ! {kill} end, Clients).
 
 % ggT-Berechnung
-ggtVorbereitung(Clients, WggT, Flag) ->
+starte_Berechnung(Clients, WggT, Flag) ->
 	% Startwerte (Mis) bestimmen
 	Mis = bestimme_mis(WggT, length(Clients)),
 	sende_Mis(Clients, Mis),
@@ -153,59 +194,32 @@ ggtVorbereitung(Clients, WggT, Flag) ->
 	end,
 	% sende den Startprozessen die y-Werte
 	sende_Y_Werte(Start_Prozesse, Y_Werte),
-	ggtBerechnung(Clients, Flag, 100000).
-
-ggtBerechnung(Clients, Flag, Ergebnis) ->
-	receive
-		% neues Mi empfangen
-		{briefmi,{Clientname,CMi,CZeit}} ->
-			Neues_Ergebnis = CMi,
-			logging("Koordinator@Rechner.log", io_lib:format(Clientname ++ " meldet neues Mi " ++ CMi ++ " um " ++ CZeit ++ " (" ++ timeMilliSecond() ++ ").~n", [])),
-			ggtBerechnung(Clients, Flag, Neues_Ergebnis);
-		% Ergebnis einer ggT-Berechnung empfangen
-		{briefterm,{Clientname,CMi,CZeit},From} ->
-			case CMi > Ergebnis of
-				% Fehler: Berechnetes Ergebnis ist größer als bisher bekannte kleinste Zahl
-				true ->
-					case Flag == 0 of
-					 	% wenn Flag = 0, nur den Fehler loggen
-						true ->
-							logging("Koordinator@Rechner.log", io_lib:format(Clientname ++ " meldet falsche Terminierung mit ggT " ++ CMi ++ " um " ++ CZeit ++ " (" ++ timeMilliSecond() ++ ").~n", [])),
-						 	bereit(Clients, Flag);
-						% wenn Flag = 1, sende dem GGT-Prozess die kleinere Zahl per sendy
-					 	false ->
-							From ! {sendy, Ergebnis},
-						 	ggtBerechnung(Clients, Flag, Ergebnis)
-					end;
-				% Ergebnis ist kleiner/gleich der bisher bekannten Zahl
-				false ->
-					logging("Koordinator@Rechner.log", io_lib:format(Clientname ++ " meldet Terminierung mit ggT " ++ CMi ++ " um " ++ CZeit ++ " (" ++ timeMilliSecond() ++ ").~n", [])),
-					bereit(Clients, Flag)
-			end;
-		% aktuelles Mi bei allen Clients erfragen
-		prompt ->
-			lists:foreach(fun(X) -> X ! {tellmi, self()} end, Clients),
-		 	ggtBerechnung(Clients, Flag, Ergebnis);
-		% aktuelles Mi empfangen
-		{mi, Mi} ->
-			% TODO wie komme ich an den Namen des GGT, der das Mi sendet?
-			logging("Koordinator@Rechner.log", io_lib:format("Aktuelles Mi" ++ Mi ++ " (" ++ timeMilliSecond() ++ ").~n", [])),
-			ggtBerechnung(Clients, Flag, Ergebnis);
-		% aktuellen Lebenszustand aller Clients erfragen
-		nudge ->
-			lists:foreach(fun(X) -> X ! {pingGGT, self()} end, Clients),
-		 	ggtBerechnung(Clients, Flag, Ergebnis);
-		% aktuellen Lebenszustand empfangen
-		{pongGGT, GGTname} ->
-			logging("Koordinator@Rechner.log", io_lib:format("ggT-Prozess " ++ GGTname ++ " ist lebendig (" ++ timeMilliSecond() ++ ").~n", [])),
-		 	ggtBerechnung(Clients, Flag, Ergebnis)
-	end.
+	bereit(Clients, Flag, 0).
 
 % Clients in Ring anordnen und Nachbarn bestimmen
-% ({setneighbors,LeftN,RightN})
-ring_bilden(Clients) ->
-	% TODO
-	ok.
+ring_bilden(Clients) -> ring_bilden(Clients, length(Clients)).
+
+ring_bilden(Clients, Index) ->
+	case Index == 1 of
+		true ->
+			Client = lists:nth(Index, Clients),
+			LeftN = lists:last(Clients),
+			RightN = lists:nth(Index+1, Clients),
+			Client ! {setneighbors, LeftN, RightN},
+			Clients;
+		false ->
+			Client = lists:nth(Index, Clients),
+			case Client == lists:last(Clients) of
+				true ->
+					LeftN = lists:nth(Index-1, Clients),
+					RightN = lists:nth(1, Clients);
+				false ->
+					LeftN = lists:nth(Index-1, Clients),
+					RightN = lists:nth(Index+1, Clients)
+			end,
+			Client ! {setneighbors, LeftN, RightN},
+			ring_bilden(Clients, Index-1)
+	end.
 
 % sende ein zufälliges Mi an jeden Client per setpm
 sende_Mis(Clients, Mis) ->
@@ -237,15 +251,9 @@ sende_Y_Werte(Clients,Y_Werte) ->
 
 % waehle x Prozesse aus allen Clients
 waehle_Prozesse(Clients, Anzahl) -> waehle_Prozesse(Clients, [], Anzahl).
-
+waehle_Prozesse(_Clients, Ausgewaehlt, 0) -> Ausgewaehlt;
 waehle_Prozesse(Clients, Ausgewaehlt, Anzahl) ->
-	case Anzahl == 0 of
-		true ->
-			Ausgewaehlt;
-		false ->
-			Element = random:uniform(length(Clients)),
-			Ausgewaehlter_Prozess = lists:nth(Element, Clients),
-			Ausgewaehlt_neu = Ausgewaehlt ++ [Ausgewaehlter_Prozess],
-			Clients_neu = lists:delete(Ausgewaehlter_Prozess, Clients),
-			waehle_Prozesse(Clients_neu, Ausgewaehlt_neu, Anzahl-1)
-	end.
+	Ausgewaehlter_Prozess = lists:nth(random:uniform(length(Clients)), Clients),
+	Ausgewaehlt_neu = Ausgewaehlt ++ [Ausgewaehlter_Prozess],
+	Clients_neu = lists:delete(Ausgewaehlter_Prozess, Clients),
+	waehle_Prozesse(Clients_neu, Ausgewaehlt_neu, Anzahl-1).
