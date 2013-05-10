@@ -33,14 +33,14 @@ start(Praktikumsgruppe, Teamnummer,Starternummer,GGTProzessnummer,ArbeitsZeit,Te
 	
 %Meldet den Prozess überall an und macht ihn erst benutzbar
 prozess_start(GGTname, Nameservice, Koordinator,ArbeitsZeit,TermZeit) ->
-	%Sich beim Koordinator mit seinen Namen anmelden
-	Koordinator ! {hello, GGTname},
-	
 	%Sich beim Nameservice mit seinen Namen anmelden
 	Nameservice ! {self(),{rebind,GGTname,node()}},
 	receive 
 		ok -> io:format("..rebind.done.\n")
 	end,
+	
+	%Sich beim Koordinator mit seinen Namen anmelden
+	Koordinator ! {hello, GGTname},
 	
 	%Bevor es los geht auf die Nachbarn warten
 	receive
@@ -55,7 +55,7 @@ prozess_start(GGTname, Nameservice, Koordinator,ArbeitsZeit,TermZeit) ->
 neues_mi(GGTname,LeftN,RightN, Koordinator,ArbeitsZeit,TermZeit) ->
 	%Warte auf erstes Mi
 	receive
-			{setpn,MiNeu} ->
+			{setpm,MiNeu} ->
 				%Start des Terminierungstimer
 				{ok,TermTimerRef} = timer:send_after(TermZeit, abstimmungsstart),
 				
@@ -157,5 +157,14 @@ loop(GGTname,LeftN,RightN,Mi, Koordinator,ArbeitsZeit,TermZeit,TermTimerRef,Time
 			%Sende ein pong an "From" zurück
 			From ! {pongGGT,GGTname};
 		kill ->								%Beendet den ggT Prozess
+			%Nameservice suchen
+	   		Nameservice = global:whereis_name(nameservice),	
+	   
+	   		%Vom Nameservice abmelden
+	  	 	Nameservice ! {self(),{unbind,GGTname}},
+			receive 
+			        ok -> io:format("..unbind..done.\n")
+			end,
+			unregister(GGTname),
 			ende
 	end.
